@@ -242,11 +242,50 @@ class Input(Task):
           state     = self.joystickHats[event.joy][event.hat]
           keyEvent  = None
 
+          # When using the GH2 PS2 controller in conjunction with a Logic3
+          # "PS2 to PS3 converter" it is impossible to pick the first fret.
+          # This may be a bug in PyGame, or generally a problem with that
+          # particular adapter, I'm not sure. Specifically, the following
+          # happens:
+          #     * If fret 1 (joy button 7) is pressed and you pick, a
+          #       JOYBUTTONUP event for the fret is first added to the
+          #       PyGame event queue, then the JOYHATMOTION event second.
+          #       When the pick is released, we automatically get a
+          #       JOYBUTTONDOWN event for the still pressed fret.
+          #     * If you press fret 1 while the pick is pressed, you will
+          #       see (careful, this is from memory): A fret 1 JOYBUTTONUP,
+          #       a fret 1 JOYBUTTONDOWN immediately afterwards, followed by
+          #       a JOYHATMOTION releasing the pick. Releasing the fret
+          #       again while maintaining the pick will result in another
+          #       JOYHATMOTION again, bringing the pick back.
+          #       This issue is currently NOT FIXED by this workaround! In
+          #       fact, *due* to the workaround, if you press and release
+          #       fret 1 while picking, the fret will be registered as UP
+          #       even though it is not actually pressed. This is very seldom
+          #       a problem during play though.
+          #     * In both those cases (that involve the first fret), we
+          #       actually get a different JOYHATMOTION event than in the
+          #       "normal" case: (1,0) instead of (0,-1) and (-1,0) instead
+          #       of (0,1). This is actually fortunate, since it allows us
+          #       to detect the situation and fix the fret 1 issue as well.
+          if event.value == (1,0) or event.value == (-1,0):
+            # rewrite the value of the hat event
+            if event.value == (1,0): final_event_value = (0,-1)
+            elif event.value == (-1,0): final_event_value = (0,1)
+            # as explained, we know that the player has button 7 pressed,
+            # but a previous event set it to UP. we fix this by simply
+            # re-issuing a "keyPressed" event.
+            id = self.encodeJoystickButton(event.joy, 7)
+            if not self.broadcastEvent(self.priorityKeyListeners, "keyPressed", id, u'\x00'):
+              self.broadcastEvent(self.keyListeners, "keyPressed", id, u'\x00')
+          else:
+            final_event_value = event.value
+
           if event.value != (0, 0) and state == (0, 0):
-            self.joystickHats[event.joy][event.hat] = event.value
+            self.joystickHats[event.joy][event.hat] = final_event_value
             keyEvent = "keyPressed"
-            args     = (self.encodeJoystickHat(event.joy, event.hat, event.value), u'\x00')
-            state    = event.value
+            args     = (self.encodeJoystickHat(event.joy, event.hat, final_event_value), u'\x00')
+            state    = final_event_value
           else:
             keyEvent = "keyReleased"
             args     = (self.encodeJoystickHat(event.joy, event.hat, state), )
